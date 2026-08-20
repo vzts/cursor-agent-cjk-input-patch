@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Apply unofficial CJK input patches to a local Cursor Agent CLI install.
 
-Patches only the text-input bundle (word / grapheme / display-width).
-Does not touch Ink log-update or move the real terminal cursor.
+Patches only Option/Ctrl+arrow word motion in the text-input bundle.
+Does not change Left/Right/Up/Down, wrap width, or the terminal cursor.
 
 Does not redistribute Cursor binaries. See README.md.
 """
@@ -115,11 +115,12 @@ TL_NEW = (
 
 REPLACEMENTS: tuple[tuple[str, str, str, str], ...] = (
     ("word helpers", WORD_OLD, WORD_NEW, "__wordSeg"),
-    ("grapheme left/right", LR_OLD, LR_NEW, 'granularity:"grapheme"'),
-    ("grapheme backspace/delete", BS_OLD, BS_NEW, "n.backspace&&B>0){const __g="),
-    ("visual up/down", NAV_OLD, NAV_NEW, "function __cw("),
-    ("text-layout width", TL_OLD, TL_NEW, "\\p{Mn}|\\p{Me}|\\p{Cf}"),
 )
+
+# Kept for tests / rollback of older installs. Not applied:
+# - grapheme Left/Right/Backspace (Hangul NFC already moves one syllable)
+# - text-layout width (wrap height must stay stock)
+# - visual Up/Down (caret is 1 column per code point; width-2 lands wrong)
 
 # Upgrade installs that used Segments.next(), which is not an iterator method.
 ITERATOR_UPGRADES: tuple[tuple[str, str, str], ...] = (
@@ -159,7 +160,7 @@ def latest_version(root: Path) -> Path | None:
 
 
 def install_kind(path: Path) -> str:
-    return "worker" if "cursor-agent-worker" in path.parts else "cli"
+    return "worker" if any("cursor-agent-worker" in part for part in path.parts) else "cli"
 
 
 def orig_backup_path(path: Path) -> Path:
@@ -272,6 +273,10 @@ def patch_input_bundle(text: str) -> tuple[str, list[str]]:
             text, ok = replace_unique(text, old, new, label, already=new)
             if ok:
                 applied.append(label)
+    if NAV_NEW in text:
+        text, ok = replace_unique(text, NAV_NEW, NAV_OLD, "revert visual up/down", already=NAV_OLD)
+        if ok:
+            applied.append("revert visual up/down")
     for marker in FORBIDDEN_MARKERS:
         if marker in text:
             raise SystemExit(

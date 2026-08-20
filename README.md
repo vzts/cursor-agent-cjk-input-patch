@@ -1,23 +1,27 @@
 # cursor-agent-cjk-input-patch
 
-Unofficial local patcher for Cursor Agent CLI CJK / Hangul / Thai prompt input.
+Unofficial local patcher for Cursor Agent CLI Hangul Option/Ctrl+arrow
+word motion.
 
-Does **not** ship Cursor binaries. Patches `4794.index.js` only (word / grapheme /
-display width). Does not move the terminal cursor. IME candidate-window position
-is not patched — that previously hung `agent`.
+Does **not** ship Cursor binaries. Rewrites one pattern in your already-installed
+text-input bundle (`4794.index.js` only). Does not move the terminal cursor.
+Left/Right/Up/Down, wrap width, and IME candidate-window position are **not**
+patched. An earlier IME cursor move hung `agent`; that code is gone.
+CJK display-width Up/Down is also gone — the fake caret is 1 column per glyph
+and width-2 landed on the wrong character.
 
 ```bash
+python3 tests/test_behavior.py
+python3 apply_patch.py             # latest CLI + IDE worker
 python3 apply_patch.py --install   # once: zsh hook so `agent` auto-patches
-python3 apply_patch.py             # or just ensure latest CLI + IDE worker
 python3 apply_patch.py --restore   # undo
 ```
 
-After a Cursor CLI update the version folder is replaced, so the patch has to
-be applied again. With `--install`, the next `agent` / `cursor-agent` launch
-does that. Already-patched installs are a no-op. One original backup is kept
-per version (`~/.local/share/cursor-agent-cjk-input-patch/backups/*.orig.bak`).
+Restart `agent` afterwards. After a CLI update the version folder is replaced;
+`--install` re-applies on the next launch. One original backup per version:
+`~/.local/share/cursor-agent-cjk-input-patch/backups/*.orig.bak`.
 
-If a future CLI minify no longer matches, the hook warns and still starts
-`agent`. Do not force it. Last resort: `curl https://cursor.com/install -fsS | bash`.
+If a future minify no longer matches, the hook warns and still starts `agent`.
+Last resort: `curl https://cursor.com/install -fsS | bash`.
 
 Unofficial, MIT (this patcher only). Not affiliated with Cursor.

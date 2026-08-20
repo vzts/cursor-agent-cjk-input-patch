@@ -18,6 +18,7 @@ from apply_patch import (  # noqa: E402
     LR_NEW,
     REPLACEMENTS,
     WORD_NEW,
+    WORD_OLD,
     patch_input_bundle,
 )
 
@@ -54,6 +55,108 @@ console.log(JSON.stringify(path));
     ]
     got = json.loads(out)
     assert got == expected, got
+
+
+def test_stock_word_motion_skips_hangul() -> None:
+    """Unpatched Option+Left treats Hangul as filler and jumps to the previous ASCII word."""
+    out = run_node(
+        WORD_OLD
+        + r"""
+const s = "hello 안녕하세요 world";
+const path = [];
+let p = s.length;
+for (let i = 0; i < 2 && p > 0; i++) {
+  p = l(s, p);
+  path.push(s.slice(0, p) + "|" + s.slice(p));
+}
+console.log(JSON.stringify(path));
+"""
+    )
+    got = json.loads(out)
+    assert got == [
+        "hello 안녕하세요 |world",
+        "|hello 안녕하세요 world",
+    ], got
+
+
+def test_plain_left_hangul_is_one_syllable() -> None:
+    """Stock Left/Right is UTF-16 --, which for NFC Hangul is one syllable. Do not patch this."""
+    out = run_node(
+        r"""
+const s = "hello 안녕하세요";
+let p = s.length;
+const path = [];
+for (let i = 0; i < 6; i++) {
+  p -= 1;
+  path.push(s.slice(0, p) + "|" + s.slice(p));
+}
+const g = new Intl.Segmenter(void 0, { granularity: "grapheme" });
+let gp = s.length;
+const gpath = [];
+for (let i = 0; i < 6; i++) {
+  let prev = 0;
+  for (const seg of g.segment(s.slice(0, gp))) prev = seg.index;
+  gp = prev;
+  gpath.push(s.slice(0, gp) + "|" + s.slice(gp));
+}
+console.log(JSON.stringify({ path, gpath }));
+"""
+    )
+    got = json.loads(out)
+    assert got["path"] == [
+        "hello 안녕하세|요",
+        "hello 안녕하|세요",
+        "hello 안녕|하세요",
+        "hello 안|녕하세요",
+        "hello |안녕하세요",
+        "hello| 안녕하세요",
+    ], got
+    assert got["gpath"] == got["path"], got
+
+
+def test_width2_up_lands_on_wrong_glyph() -> None:
+    """Why visual Up/Down is not applied: Hangul width 2 vs caret o++."""
+    out = run_node(
+        r"""
+function upChar(t,e){if(-1===t.indexOf("\n"))return null;const n=Math.min(Math.max(0,e),t.length),r=n<=0?-1:t.lastIndexOf("\n",n-1);if(-1===r)return null;const o=t.lastIndexOf("\n",Math.max(0,r-1)),s=-1===o?0:o+1,c=n-(r+1),i=r-s;return s+Math.min(c,i)}
+function cw(t){const e=t.codePointAt(0);if(e>=44032&&e<=55215)return 2;return 1}
+function col(t,e,n){let r=0;for(let o=e;o<n;o++)r+=cw(t[o]);return r}
+function atCol(t,e,n,r){let o=0,s=e;for(;s<n;s++){const w=cw(t[s]);if(o+w>r)break;o+=w}return s}
+function upWidth2(t,e){if(-1===t.indexOf("\n"))return null;const n=Math.min(Math.max(0,e),t.length),r=n<=0?-1:t.lastIndexOf("\n",n-1);if(-1===r)return null;const s=t.lastIndexOf("\n",Math.max(0,r-1)),c=-1===s?0:s+1,i=col(t,r+1,n);return atCol(t,c,r,i)}
+function mark(t,i){return t.slice(0,i)+"|"+t.slice(i)}
+const s = "안녕하세요\nhello";
+console.log(JSON.stringify({
+  stock: mark(s, upChar(s, s.length)),
+  width2: mark(s, upWidth2(s, s.length)),
+}));
+"""
+    )
+    got = json.loads(out)
+    assert got["stock"] == "안녕하세요|\nhello", got
+    assert got["width2"] == "안녕|하세요\nhello", got
+
+
+def test_up_down_uses_character_columns() -> None:
+    """CLI caret is 1 column per code point; CJK width-2 columns miss the glyph."""
+    out = run_node(
+        r"""
+function up(t,e){if(-1===t.indexOf("\n"))return null;const n=Math.min(Math.max(0,e),t.length),r=n<=0?-1:t.lastIndexOf("\n",n-1);if(-1===r)return null;const o=t.lastIndexOf("\n",Math.max(0,r-1)),s=-1===o?0:o+1,c=n-(r+1),i=r-s;return s+Math.min(c,i)}
+function down(t,e){if(-1===t.indexOf("\n"))return null;const n=Math.min(Math.max(0,e),t.length),r=t.indexOf("\n",n);if(-1===r)return null;const o=n<=0?-1:t.lastIndexOf("\n",n-1),s=n-(-1===o?0:o+1),c=r+1,i=t.indexOf("\n",c),u=(-1===i?t.length:i)-c;return c+Math.min(s,u)}
+function mark(t,i){return t.slice(0,i)+"|"+t.slice(i)}
+const s = "안녕하세요\nhello";
+const end = s.length;
+const fromH = s.indexOf("\n")+2;
+console.log(JSON.stringify({
+  upFromEnd: mark(s, up(s, end)),
+  upFromE: mark(s, up(s, fromH)),
+  downFromAn: mark(s, down(s, 1)),
+}));
+"""
+    )
+    got = json.loads(out)
+    assert got["upFromEnd"] == "안녕하세요|\nhello", got
+    assert got["upFromE"] == "안|녕하세요\nhello", got
+    assert got["downFromAn"] == "안녕하세요\nh|ello", got
 
 
 def test_thai_width() -> None:
@@ -104,6 +207,7 @@ def test_patcher_has_no_ime_cursor_hack() -> None:
     assert "upFromBottom" not in text
     assert "[Symbol.iterator]().next()" in LR_NEW
     assert all(old in text for old, _new in ((u[1], u[2]) for u in ITERATOR_UPGRADES))
+    assert [label for label, *_ in REPLACEMENTS] == ["word helpers"]
 
 
 def test_grapheme_steps() -> None:
@@ -148,6 +252,21 @@ def test_iterator_upgrade_on_old_patch() -> None:
     assert "grapheme iterator (delete)" in applied
     assert ".segment(__rest).next()" not in updated
     assert "[Symbol.iterator]().next()" in updated
+
+
+def test_apply_does_not_touch_arrows_or_width() -> None:
+    from apply_patch import BS_OLD, LR_OLD, NAV_OLD, TL_OLD
+
+    fixture = "HEAD" + WORD_OLD + LR_OLD + BS_OLD + NAV_OLD + TL_OLD + "TAIL"
+    updated, applied = patch_input_bundle(fixture)
+    assert applied == ["word helpers"], applied
+    assert LR_OLD in updated
+    assert BS_OLD in updated
+    assert NAV_OLD in updated
+    assert TL_OLD in updated
+    assert "__cw" not in updated
+    assert 'granularity:"grapheme"' not in updated
+    assert "\\p{Mn}|\\p{Me}|\\p{Cf}" not in updated
 
 
 def test_apply_on_fixture_is_unique_and_valid_js() -> None:
@@ -232,11 +351,16 @@ def test_repo_privacy() -> None:
 
 if __name__ == "__main__":
     test_word_boundaries()
+    test_stock_word_motion_skips_hangul()
+    test_plain_left_hangul_is_one_syllable()
+    test_width2_up_lands_on_wrong_glyph()
+    test_up_down_uses_character_columns()
     test_thai_width()
     test_hangul_display_width()
     test_patcher_has_no_ime_cursor_hack()
     test_grapheme_steps()
     test_iterator_upgrade_on_old_patch()
+    test_apply_does_not_touch_arrows_or_width()
     test_apply_on_fixture_is_unique_and_valid_js()
     test_one_orig_backup_never_overwritten()
     test_restore_rejects_dry_run_combo()
