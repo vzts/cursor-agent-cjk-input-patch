@@ -75,17 +75,27 @@ console.log(String(w));
 
 def test_repo_privacy() -> None:
     root = Path(__file__).resolve().parents[1]
-    forbidden = ("crsr_", "Bearer ", "sk-ant-", "sk-proj-", "test1234!", "/Users/yoyo/")
+    # Concatenate so this file does not embed full forbidden tokens as literals.
+    forbidden = (
+        "crsr" + "_",
+        "Bear" + "er ",
+        "sk-" + "ant-",
+        "sk-" + "proj-",
+        "test1234" + "!",
+        "/Users/" + "yoyo/",
+    )
     for path in root.rglob("*"):
         if not path.is_file():
             continue
         if path.suffix == ".bak":
             raise AssertionError(f"do not ship backups: {path}")
+        if path.name == Path(__file__).name:
+            continue
         if path.suffix not in {".py", ".md", ".txt", ".gitignore"} and path.name != "LICENSE":
             continue
         text = path.read_text(errors="ignore")
         for needle in forbidden:
-            assert needle not in text, f"{path.name} contains {needle!r}"
+            assert needle not in text, f"{path.name} contains sensitive marker"
 
 
 if __name__ == "__main__":
