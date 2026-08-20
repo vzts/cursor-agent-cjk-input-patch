@@ -14,6 +14,8 @@ sys.path.insert(0, str(ROOT))
 
 from apply_patch import (  # noqa: E402
     FORBIDDEN_MARKERS,
+    ITERATOR_UPGRADES,
+    LR_NEW,
     REPLACEMENTS,
     WORD_NEW,
     patch_input_bundle,
@@ -100,6 +102,52 @@ def test_patcher_has_no_ime_cursor_hack() -> None:
     assert "log-update.js" not in text
     assert "e.write(" not in text
     assert "upFromBottom" not in text
+    assert "[Symbol.iterator]().next()" in LR_NEW
+    assert all(old in text for old, _new in ((u[1], u[2]) for u in ITERATOR_UPGRADES))
+
+
+def test_grapheme_steps() -> None:
+    out = run_node(
+        r"""
+function next(t, e) {
+  const g = new Intl.Segmenter(void 0, { granularity: "grapheme" });
+  const s = g.segment(t.slice(e))[Symbol.iterator]().next().value;
+  return e + (s ? s.segment.length : 1);
+}
+function prev(t, e) {
+  if (e <= 0) return 0;
+  const g = new Intl.Segmenter(void 0, { granularity: "grapheme" });
+  let p = 0;
+  for (const s of g.segment(t.slice(0, e))) p = s.index;
+  return p;
+}
+const t = "a👍한";
+console.log(JSON.stringify({
+  next0: next(t, 0),
+  nextA: next(t, 1),
+  prevEnd: prev(t, t.length),
+  prevHan: prev(t, prev(t, t.length)),
+}));
+"""
+    )
+    got = json.loads(out)
+    assert got["next0"] == 1, got
+    assert got["nextA"] == 3, got  # thumbs-up is two UTF-16 units
+    assert got["prevEnd"] == 3, got
+    assert got["prevHan"] == 1, got
+
+
+def test_iterator_upgrade_on_old_patch() -> None:
+    stub = (
+        "__wordSeg granularity:\"grapheme\" n.backspace&&B>0){const __g= function __cw( \\p{Mn}|\\p{Me}|\\p{Cf}"
+        "__g.segment(__rest).next().value"
+        "__g.segment(J.slice(B)).next().value"
+    )
+    updated, applied = patch_input_bundle(stub)
+    assert "grapheme iterator (right)" in applied
+    assert "grapheme iterator (delete)" in applied
+    assert ".segment(__rest).next()" not in updated
+    assert "[Symbol.iterator]().next()" in updated
 
 
 def test_apply_on_fixture_is_unique_and_valid_js() -> None:
@@ -132,12 +180,12 @@ def test_latest_backup_prefers_newest() -> None:
     older = backup_dir / "4794.index.js.20200101-000000.bak"
     newer = backup_dir / "2026.08.11-e8db854-4794.index.js.20260821-000000-1.bak"
     older.write_text("old-original")
-    newer.write_text("new-original")
+    newer.write_text("__wordSeg patched")
     previous = ap.BACKUP_DIR
     ap.BACKUP_DIR = backup_dir
     try:
         got = ap.latest_backup_for(target)
-        assert got == newer, got
+        assert got == older, got
     finally:
         ap.BACKUP_DIR = previous
         shutil.rmtree(tmp, ignore_errors=True)
@@ -182,6 +230,8 @@ if __name__ == "__main__":
     test_thai_width()
     test_hangul_display_width()
     test_patcher_has_no_ime_cursor_hack()
+    test_grapheme_steps()
+    test_iterator_upgrade_on_old_patch()
     test_apply_on_fixture_is_unique_and_valid_js()
     test_latest_backup_prefers_newest()
     test_restore_rejects_dry_run_combo()

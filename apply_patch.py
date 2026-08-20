@@ -57,7 +57,8 @@ LR_NEW = (
     "if(n.leftArrow){if(v&&Nt>0){const __g=new Intl.Segmenter(void 0,{granularity:\"grapheme\"});"
     "let __p=0;for(const __s of __g.segment(Ut.slice(0,Nt)))__p=__s.index;Nt=__p}}"
     "else if(n.rightArrow){if(v&&Nt<Ut.length){const __g=new Intl.Segmenter(void 0,{granularity:\"grapheme\"});"
-    "const __rest=Ut.slice(Nt);const __s=__g.segment(__rest).next().value;Nt+=__s?__s.segment.length:1}}"
+    "const __rest=Ut.slice(Nt);const __s=__g.segment(__rest)[Symbol.iterator]().next().value;"
+    "Nt+=__s?__s.segment.length:1}}"
 )
 
 BS_OLD = (
@@ -69,7 +70,7 @@ BS_NEW = (
     "let __p=0;for(const __s of __g.segment(J.slice(0,B)))__p=__s.index;"
     "Ut=J.slice(0,__p)+J.slice(B);Nt=__p}"
     "else if(n.delete&&B<J.length){const __g=new Intl.Segmenter(void 0,{granularity:\"grapheme\"});"
-    "const __s=__g.segment(J.slice(B)).next().value;const __n=B+(__s?__s.segment.length:1);"
+    "const __s=__g.segment(J.slice(B))[Symbol.iterator]().next().value;const __n=B+(__s?__s.segment.length:1);"
     "Ut=J.slice(0,B)+J.slice(__n);Nt=B}"
 )
 
@@ -120,6 +121,20 @@ REPLACEMENTS: tuple[tuple[str, str, str, str], ...] = (
     ("text-layout width", TL_OLD, TL_NEW, "\\p{Mn}|\\p{Me}|\\p{Cf}"),
 )
 
+# Upgrade installs that used Segments.next(), which is not an iterator method.
+ITERATOR_UPGRADES: tuple[tuple[str, str, str], ...] = (
+    (
+        "grapheme iterator (right)",
+        "__g.segment(__rest).next().value",
+        "__g.segment(__rest)[Symbol.iterator]().next().value",
+    ),
+    (
+        "grapheme iterator (delete)",
+        "__g.segment(J.slice(B)).next().value",
+        "__g.segment(J.slice(B))[Symbol.iterator]().next().value",
+    ),
+)
+
 # Split so this file does not embed the old IME-hack payloads as contiguous literals.
 FORBIDDEN_MARKERS = (
     "__CURSOR_AGENT_IME_" + "REPOSITION",
@@ -159,7 +174,9 @@ def latest_backup_for(path: Path) -> Path | None:
     ]
     if not matches:
         return None
-    return max(matches, key=lambda p: p.stat().st_mtime)
+    originals = [bak for bak in matches if "__wordSeg" not in bak.read_text()]
+    pool = originals or matches
+    return max(pool, key=lambda p: p.stat().st_mtime)
 
 
 def list_backups() -> None:
@@ -194,6 +211,11 @@ def patch_input_bundle(text: str) -> tuple[str, list[str]]:
         text, ok = replace_unique(text, old, new, label, already)
         if ok:
             applied.append(label)
+    for label, old, new in ITERATOR_UPGRADES:
+        if old in text:
+            text, ok = replace_unique(text, old, new, label, already=new)
+            if ok:
+                applied.append(label)
     for marker in FORBIDDEN_MARKERS:
         if marker in text:
             raise SystemExit(
