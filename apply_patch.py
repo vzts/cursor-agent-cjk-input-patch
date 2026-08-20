@@ -9,10 +9,10 @@ Does not redistribute Cursor binaries. See README.md.
 from __future__ import annotations
 
 import argparse
+import re
 import shutil
 import subprocess
 import sys
-from datetime import datetime
 from pathlib import Path
 
 BACKUP_DIR = Path.home() / ".local/share/cursor-agent-cjk-input-patch" / "backups"
@@ -143,6 +143,10 @@ FORBIDDEN_MARKERS = (
 )
 
 
+HOOK_BEGIN = "# cursor-agent-cjk-input-patch begin"
+HOOK_END = "# cursor-agent-cjk-input-patch end"
+
+
 def latest_version(root: Path) -> Path | None:
     if not root.exists():
         return None
@@ -154,40 +158,92 @@ def latest_version(root: Path) -> Path | None:
     return dirs[0] if dirs else None
 
 
-def backup(path: Path) -> Path:
+def install_kind(path: Path) -> str:
+    return "worker" if "cursor-agent-worker" in path.parts else "cli"
+
+
+def orig_backup_path(path: Path) -> Path:
+    return BACKUP_DIR / f"{install_kind(path)}-{path.parent.name}-{path.name}.orig.bak"
+
+
+def is_original_text(text: str) -> bool:
+    return "__wordSeg" not in text
+
+
+def ensure_original_backup(path: Path, original_text: str) -> Path | None:
+    """Keep one unpatched copy per CLI/worker version. Never overwrite."""
+    dest = orig_backup_path(path)
+    if not is_original_text(original_text):
+        return dest if dest.exists() else None
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-    dest = BACKUP_DIR / f"{path.parent.name}-{path.name}.{stamp}.bak"
-    shutil.copy2(path, dest)
+    if not dest.exists():
+        shutil.copy2(path, dest)
     return dest
 
 
-def latest_backup_for(path: Path) -> Path | None:
+def original_backup_for(path: Path) -> Path | None:
+    dest = orig_backup_path(path)
+    if dest.exists() and is_original_text(dest.read_text()):
+        return dest
+    fallback = BACKUP_DIR / f"cli-{path.parent.name}-{path.name}.orig.bak"
+    if fallback.exists() and is_original_text(fallback.read_text()):
+        return fallback
     if not BACKUP_DIR.exists():
         return None
-    name = path.name
-    parent = path.parent.name
-    matches = [
+    legacy = [
         bak
         for bak in BACKUP_DIR.glob("*.bak")
-        if bak.name.startswith(f"{parent}-{name}.") or bak.name.startswith(f"{name}.")
+        if not bak.name.endswith(".orig.bak")
+        and (bak.name.startswith(f"{path.parent.name}-{path.name}.") or bak.name.startswith(f"{path.name}."))
+        and is_original_text(bak.read_text())
     ]
-    if not matches:
+    if not legacy:
         return None
-    originals = [bak for bak in matches if "__wordSeg" not in bak.read_text()]
-    pool = originals or matches
-    return max(pool, key=lambda p: p.stat().st_mtime)
+    return max(legacy, key=lambda p: p.stat().st_mtime)
+
+
+def migrate_legacy_backups() -> None:
+    if not BACKUP_DIR.exists():
+        return
+    latest = latest_version(DEFAULT_VERSIONS)
+    latest_name = latest.name if latest else "unknown"
+    for bak in list(BACKUP_DIR.glob("*.bak")):
+        if bak.name.endswith(".orig.bak"):
+            continue
+        try:
+            text = bak.read_text()
+        except OSError:
+            continue
+        if not is_original_text(text):
+            bak.unlink(missing_ok=True)
+            continue
+        marker = "-4794.index.js."
+        if marker in bak.name:
+            version = bak.name.split(marker, 1)[0]
+            fname = "4794.index.js"
+        elif bak.name.startswith("4794.index.js."):
+            version = latest_name
+            fname = "4794.index.js"
+        else:
+            bak.unlink(missing_ok=True)
+            continue
+        dest = BACKUP_DIR / f"cli-{version}-{fname}.orig.bak"
+        if dest.exists():
+            bak.unlink(missing_ok=True)
+        else:
+            bak.rename(dest)
 
 
 def list_backups() -> None:
+    migrate_legacy_backups()
     if not BACKUP_DIR.exists():
         print(f"no backups at {BACKUP_DIR}")
         return
-    files = sorted(BACKUP_DIR.glob("*.bak"), key=lambda p: p.stat().st_mtime, reverse=True)
+    files = sorted(BACKUP_DIR.glob("*.orig.bak"))
     if not files:
         print(f"no backups at {BACKUP_DIR}")
         return
-    print(f"backups in {BACKUP_DIR}:")
+    print(f"original backups in {BACKUP_DIR}:")
     for bak in files:
         print(f"  {bak.name}")
 
@@ -280,61 +336,94 @@ def warn_old_ime(root: Path) -> None:
         )
 
 
-def patch_tree(root: Path, dry_run: bool = False) -> None:
-    print("target:", root)
-    warn_old_ime(root)
+def patch_tree(root: Path, dry_run: bool = False, verbose: bool = False) -> bool:
+    if verbose:
+        print("target:", root)
+        warn_old_ime(root)
     path = find_input_bundle(root)
     original = path.read_text()
     updated, applied = patch_input_bundle(original)
     if not applied:
-        print(f"  {path.name}: already up to date")
-        node_check(path)
-        return
-    print(f"  {path.name}: {', '.join(applied)}")
+        if verbose:
+            print(f"  {path.name}: already up to date")
+        return False
+    kind = install_kind(root)
+    print(f"patched {kind} {root.name}")
+    if verbose:
+        print(f"  {path.name}: {', '.join(applied)}")
     if dry_run:
-        return
-    bak = backup(path)
+        return True
+    bak = ensure_original_backup(path, original)
     path.write_text(updated)
     try:
         node_check(path)
     except SystemExit:
-        shutil.copy2(bak, path)
-        print(f"  rolled back {path.name} from {bak}")
+        if bak and bak.exists():
+            shutil.copy2(bak, path)
+        else:
+            path.write_text(original)
+        print(f"  rolled back {path.name}", file=sys.stderr)
         raise
-    print(f"  backup: {bak}")
+    return True
 
 
 def restore_tree(root: Path) -> None:
     print("restore target:", root)
     path = find_input_bundle(root, restoring=True)
-    bak = latest_backup_for(path)
+    bak = original_backup_for(path)
     if not bak:
         raise SystemExit(
-            f"No backup for {path.name} under {BACKUP_DIR}\n"
+            f"No original backup for {path.name} under {BACKUP_DIR}\n"
             f"Reinstall the official CLI instead:\n  {REINSTALL_HINT}"
         )
     shutil.copy2(bak, path)
     node_check(path)
-    print(f"  restored {path.name} from {bak}")
+    print(f"  restored {path.name} from {bak.name}")
     warn_old_ime(root)
 
 
 def resolve_roots(version_dir: str | None, worker: bool) -> list[Path]:
-    roots: list[Path] = []
     if version_dir:
-        roots.append(Path(version_dir).expanduser())
-        return roots
+        return [Path(version_dir).expanduser()]
     latest = latest_version(DEFAULT_VERSIONS)
     if not latest:
         raise SystemExit(f"No agent versions under {DEFAULT_VERSIONS}")
-    roots.append(latest)
+    roots = [latest]
     if worker:
         w = latest_version(WORKER_VERSIONS)
         if w:
             roots.append(w)
-        else:
-            print("note: --worker set but no worker install found")
     return roots
+
+
+def shell_hook(script: Path) -> str:
+    return (
+        f"{HOOK_BEGIN}\n"
+        f"agent() {{ python3 \"{script}\" --ensure; command agent \"$@\"; }}\n"
+        f"cursor-agent() {{ python3 \"{script}\" --ensure; command cursor-agent \"$@\"; }}\n"
+        f"{HOOK_END}\n"
+    )
+
+
+def install_shell_hook() -> Path:
+    rc = Path.home() / ".zshrc"
+    script = Path(__file__).resolve()
+    block = shell_hook(script)
+    text = rc.read_text() if rc.exists() else ""
+    if HOOK_BEGIN in text:
+        text = re.sub(
+            rf"{re.escape(HOOK_BEGIN)}.*?{re.escape(HOOK_END)}\n?",
+            block,
+            text,
+            count=1,
+            flags=re.S,
+        )
+    else:
+        text = text.rstrip() + "\n\n" + block
+    rc.write_text(text)
+    print(f"installed shell hook in {rc}")
+    print("open a new terminal (or `source ~/.zshrc`) so `agent` auto-patches on launch")
+    return rc
 
 
 def main() -> None:
@@ -342,39 +431,55 @@ def main() -> None:
     parser.add_argument(
         "version_dir",
         nargs="?",
-        help="Cursor agent version directory (defaults to latest under ~/.local/share/cursor-agent/versions)",
+        help="Cursor agent version directory (defaults to latest CLI + IDE worker)",
     )
     parser.add_argument(
         "--worker",
         action="store_true",
-        help="Also patch/restore the Cursor IDE agent-worker install if present",
+        help="Deprecated: worker is patched by default. Ignored.",
     )
+    parser.add_argument("--no-worker", action="store_true", help="Skip the IDE agent-worker copy")
     parser.add_argument("--dry-run", action="store_true", help="Print actions without writing")
     parser.add_argument(
         "--restore",
         action="store_true",
-        help="Copy the newest matching backup over the installed text-input bundle",
+        help="Restore the original text-input bundle from the saved .orig.bak",
     )
+    parser.add_argument("--list-backups", action="store_true", help="Show original backups and exit")
     parser.add_argument(
-        "--list-backups",
+        "--ensure",
         action="store_true",
-        help="Show local backups and exit",
+        help="Quiet no-op if already patched; if a CLI update cannot be patched, warn and exit 0",
     )
+    parser.add_argument("--install", action="store_true", help="Install a zsh hook so `agent` auto-patches")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Print per-file details")
     args = parser.parse_args()
+
+    migrate_legacy_backups()
 
     if args.list_backups:
         list_backups()
         return
+    if args.install:
+        install_shell_hook()
+        args.ensure = True
     if args.restore and args.dry_run:
         raise SystemExit("use --restore or --dry-run, not both")
 
-    for root in resolve_roots(args.version_dir, args.worker):
+    worker = not args.no_worker
+    for root in resolve_roots(args.version_dir, worker):
         if not root.is_dir():
             raise SystemExit(f"Not a directory: {root}")
         if args.restore:
             restore_tree(root)
-        else:
-            patch_tree(root, dry_run=args.dry_run)
+            continue
+        try:
+            patch_tree(root, dry_run=args.dry_run, verbose=args.verbose)
+        except SystemExit as exc:
+            if args.ensure:
+                print(f"cjk patch skipped ({root.name}): {exc}", file=sys.stderr)
+                continue
+            raise
 
 
 if __name__ == "__main__":

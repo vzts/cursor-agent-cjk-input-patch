@@ -168,24 +168,29 @@ def test_apply_on_fixture_is_unique_and_valid_js() -> None:
         Path(path).unlink(missing_ok=True)
 
 
-def test_latest_backup_prefers_newest() -> None:
+def test_one_orig_backup_never_overwritten() -> None:
     import apply_patch as ap
 
     tmp = Path(tempfile.mkdtemp())
     backup_dir = tmp / "backups"
     backup_dir.mkdir()
-    target = tmp / "2026.08.11-e8db854" / "4794.index.js"
-    target.parent.mkdir()
-    target.write_text("patched")
-    older = backup_dir / "4794.index.js.20200101-000000.bak"
-    newer = backup_dir / "2026.08.11-e8db854-4794.index.js.20260821-000000-1.bak"
-    older.write_text("old-original")
-    newer.write_text("__wordSeg patched")
+    target = tmp / "versions" / "2026.08.11-e8db854" / "4794.index.js"
+    target.parent.mkdir(parents=True)
+    target.write_text("vanilla")
     previous = ap.BACKUP_DIR
     ap.BACKUP_DIR = backup_dir
     try:
-        got = ap.latest_backup_for(target)
-        assert got == older, got
+        first = ap.ensure_original_backup(target, "vanilla")
+        assert first is not None
+        first.write_text("VANILLA-KEEP")
+        target.write_text("changed")
+        second = ap.ensure_original_backup(target, "vanilla")
+        assert second == first
+        assert first.read_text() == "VANILLA-KEEP"
+        target.write_text("__wordSeg patched")
+        assert ap.ensure_original_backup(target, "__wordSeg patched") == first
+        assert first.read_text() == "VANILLA-KEEP"
+        assert ap.original_backup_for(target) == first
     finally:
         ap.BACKUP_DIR = previous
         shutil.rmtree(tmp, ignore_errors=True)
@@ -233,7 +238,7 @@ if __name__ == "__main__":
     test_grapheme_steps()
     test_iterator_upgrade_on_old_patch()
     test_apply_on_fixture_is_unique_and_valid_js()
-    test_latest_backup_prefers_newest()
+    test_one_orig_backup_never_overwritten()
     test_restore_rejects_dry_run_combo()
     test_repo_privacy()
     print("ok")

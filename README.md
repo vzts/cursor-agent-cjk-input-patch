@@ -2,38 +2,22 @@
 
 Unofficial local patcher for Cursor Agent CLI CJK / Hangul / Thai prompt input.
 
-Does **not** ship Cursor binaries. Rewrites patterns in your already-installed
-text-input bundle (`4794.index.js` only). Does not move the terminal cursor.
-
-- Option/Ctrl+Arrow: `Intl.Segmenter` word boundaries (Hangul is a word)
-- Left/Right / Backspace / Delete: grapheme steps
-- Up/Down + Thai: display width (CJK = 2, combining marks = 0)
-
-IME candidate-window position is **not** patched. An earlier version did that
-via Ink cursor moves and could hang `agent`; that code is gone.
+Does **not** ship Cursor binaries. Patches `4794.index.js` only (word / grapheme /
+display width). Does not move the terminal cursor. IME candidate-window position
+is not patched — that previously hung `agent`.
 
 ```bash
-python3 tests/test_behavior.py
-python3 apply_patch.py          # latest CLI install
-python3 apply_patch.py --worker # also IDE worker copy
+python3 apply_patch.py --install   # once: zsh hook so `agent` auto-patches
+python3 apply_patch.py             # or just ensure latest CLI + IDE worker
+python3 apply_patch.py --restore   # undo
 ```
 
-Restart `agent` afterwards. Python 3.9+ and `node` required.
+After a Cursor CLI update the version folder is replaced, so the patch has to
+be applied again. With `--install`, the next `agent` / `cursor-agent` launch
+does that. Already-patched installs are a no-op. One original backup is kept
+per version (`~/.local/share/cursor-agent-cjk-input-patch/backups/*.orig.bak`).
 
-```bash
-python3 apply_patch.py --dry-run
-python3 apply_patch.py --restore          # undo from local backup
-python3 apply_patch.py --restore --worker
-```
-
-Backups: `~/.local/share/cursor-agent-cjk-input-patch/backups/`.  
-If `--restore` is not enough (or `agent` still dumps garbage):
-
-```bash
-curl https://cursor.com/install -fsS | bash
-```
-
-Then apply this patcher again. If `pattern not found` after a CLI update, do
-not force it.
+If a future CLI minify no longer matches, the hook warns and still starts
+`agent`. Do not force it. Last resort: `curl https://cursor.com/install -fsS | bash`.
 
 Unofficial, MIT (this patcher only). Not affiliated with Cursor.
