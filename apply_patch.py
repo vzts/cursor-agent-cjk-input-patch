@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Apply unofficial CJK input patches to a local Cursor Agent CLI install.
 
-Patches only Option/Ctrl+arrow word motion in the text-input bundle.
-Does not change Left/Right/Up/Down, wrap width, or the terminal cursor.
+Patches Hangul Option/Ctrl+arrow word motion, and empty-line scroll mapping
+so Up onto a blank line above a long URL does not jump the caret to the URL.
 
 Does not redistribute Cursor binaries. See README.md.
 """
@@ -113,14 +113,28 @@ TL_NEW = (
     "n>=65280&&n<=65376||n>=65504&&n<=65510||n>=127744&&n<=129535?2:1}"
 )
 
+# Empty lines have startIndex===endIndex; EOL sits on endIndex. Stock findLine
+# used e<endIndex only, so blank/EOL mapped to line 0 and scroll jumped to the URL.
+FIND_LINE_OLD = (
+    "if(e>=s.startIndex&&e<s.endIndex){const t=e-s.startIndex;"
+    "return{line:o,column:s.charToColumn[t]||0}}e<s.startIndex?r=o-1:n=o+1"
+)
+FIND_LINE_NEW = (
+    "if(e>=s.startIndex&&(e<s.endIndex||e===s.endIndex&&(s.startIndex===s.endIndex||"
+    "o+1>=t.lines.length||t.lines[o+1].startIndex>e))){const c=e-s.startIndex;"
+    "return{line:o,column:e>=s.endIndex?s.visualWidth:s.charToColumn[c]||0}}"
+    "e<s.startIndex?r=o-1:n=o+1"
+)
+
 REPLACEMENTS: tuple[tuple[str, str, str, str], ...] = (
     ("word helpers", WORD_OLD, WORD_NEW, "__wordSeg"),
+    ("empty-line findLine", FIND_LINE_OLD, FIND_LINE_NEW, "e===s.endIndex&&(s.startIndex===s.endIndex"),
 )
 
 # Kept for tests / rollback of older installs. Not applied:
 # - grapheme Left/Right/Backspace (Hangul NFC already moves one syllable)
 # - text-layout width (wrap height must stay stock)
-# - visual Up/Down (caret is 1 column per code point; width-2 lands wrong)
+# - CJK width-2 Up/Down (caret is 1 column per code point; width-2 lands wrong)
 
 # Upgrade installs that used Segments.next(), which is not an iterator method.
 ITERATOR_UPGRADES: tuple[tuple[str, str, str], ...] = (

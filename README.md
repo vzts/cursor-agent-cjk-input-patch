@@ -1,14 +1,14 @@
 # cursor-agent-cjk-input-patch
 
 Unofficial local patcher for Cursor Agent CLI Hangul Option/Ctrl+arrow
-word motion.
+word motion, and for Up onto a blank line above a long wrapped URL.
 
-Does **not** ship Cursor binaries. Rewrites one pattern in your already-installed
+Does **not** ship Cursor binaries. Rewrites patterns in your already-installed
 text-input bundle (`4794.index.js` only). Does not move the terminal cursor.
-Left/Right/Up/Down, wrap width, and IME candidate-window position are **not**
-patched. An earlier IME cursor move hung `agent`; that code is gone.
-CJK display-width Up/Down is also gone — the fake caret is 1 column per glyph
-and width-2 landed on the wrong character.
+Left/Right and IME candidate-window position are **not** patched. An earlier
+IME cursor move hung `agent`; that code is gone. CJK display-width Up/Down is
+also gone — the fake caret is 1 column per glyph and width-2 landed on the
+wrong character.
 
 ```bash
 python3 tests/test_behavior.py

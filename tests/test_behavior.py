@@ -207,7 +207,142 @@ def test_patcher_has_no_ime_cursor_hack() -> None:
     assert "upFromBottom" not in text
     assert "[Symbol.iterator]().next()" in LR_NEW
     assert all(old in text for old, _new in ((u[1], u[2]) for u in ITERATOR_UPGRADES))
-    assert [label for label, *_ in REPLACEMENTS] == ["word helpers"]
+    assert [label for label, *_ in REPLACEMENTS] == ["word helpers", "empty-line findLine"]
+
+
+def test_empty_line_findline_maps_blank_not_url() -> None:
+    """Stock findLine misses empty lines (start===end); scroll then jumps to the URL."""
+    from apply_patch import FIND_LINE_NEW, FIND_LINE_OLD
+
+    out = run_node(
+        r"""
+function findLineStock(lines, e, textLength) {
+  if (e >= textLength) {
+    if (0 === lines.length) return {line:0,column:0};
+    const last = lines[lines.length-1];
+    return {line: lines.length-1, column: last.visualWidth};
+  }
+  let n=0, r=lines.length-1;
+  for (;n<=r;) {
+    const o=Math.floor((n+r)/2), s=lines[o];
+    if (e>=s.startIndex&&e<s.endIndex) {
+      const t=e-s.startIndex;
+      return {line:o, column:s.charToColumn[t]||0};
+    }
+    e<s.startIndex?r=o-1:n=o+1;
+  }
+  return {line:0, column:0};
+}
+function findLineFixed(lines, e, textLength) {
+  if (e >= textLength) {
+    if (0 === lines.length) return {line:0,column:0};
+    const last = lines[lines.length-1];
+    return {line: lines.length-1, column: last.visualWidth};
+  }
+  let n=0, r=lines.length-1;
+  const t={lines};
+  for (;n<=r;) {
+    const o=Math.floor((n+r)/2), s=lines[o];
+"""
+        + FIND_LINE_NEW
+        + r"""
+  }
+  return {line:0, column:0};
+}
+const lines = [
+  {startIndex:0,endIndex:80,visualWidth:80,charToColumn:Object.fromEntries([...Array(81)].map((_,i)=>[i,i]))},
+  {startIndex:80,endIndex:120,visualWidth:40,charToColumn:Object.fromEntries([...Array(41)].map((_,i)=>[i,i]))},
+  {startIndex:121,endIndex:121,visualWidth:0,charToColumn:{0:0}},
+  {startIndex:122,endIndex:127,visualWidth:5,charToColumn:Object.fromEntries([...Array(6)].map((_,i)=>[i,i]))},
+  {startIndex:128,endIndex:128,visualWidth:0,charToColumn:{0:0}},
+  {startIndex:129,endIndex:129,visualWidth:0,charToColumn:{0:0}},
+  {startIndex:130,endIndex:184,visualWidth:54,charToColumn:Object.fromEntries([...Array(55)].map((_,i)=>[i,i]))},
+];
+const textLength = 184;
+console.log(JSON.stringify({
+  stockBlank: findLineStock(lines, 129, textLength),
+  fixedBlank: findLineFixed(lines, 129, textLength),
+  stockEol: findLineStock(lines, 120, textLength),
+  fixedEol: findLineFixed(lines, 120, textLength),
+  stockKorean: findLineStock(lines, 130, textLength),
+  fixedKorean: findLineFixed(lines, 130, textLength),
+}));
+"""
+    )
+    got = json.loads(out)
+    assert got["stockBlank"] == {"line": 0, "column": 0}, got
+    assert got["fixedBlank"] == {"line": 5, "column": 0}, got
+    assert got["stockEol"] == {"line": 0, "column": 0}, got
+    assert got["fixedEol"]["line"] == 1 and got["fixedEol"]["column"] == 40, got
+    assert got["stockKorean"]["line"] == 6, got
+    assert got["fixedKorean"]["line"] == 6, got
+    assert FIND_LINE_OLD not in FIND_LINE_NEW
+
+
+def test_empty_line_scroll_keeps_korean_visible() -> None:
+    """Wrapped URL + blank above Korean: stock scroll jumps to 0; fixed keeps scroll."""
+    from apply_patch import FIND_LINE_NEW
+
+    out = run_node(
+        r"""
+function findLineStock(lines, e, textLength) {
+  if (e >= textLength) {
+    const last = lines[lines.length-1];
+    return {line: lines.length-1, column: last.visualWidth};
+  }
+  let n=0, r=lines.length-1;
+  for (;n<=r;) {
+    const o=Math.floor((n+r)/2), s=lines[o];
+    if (e>=s.startIndex&&e<s.endIndex) return {line:o, column:0};
+    e<s.startIndex?r=o-1:n=o+1;
+  }
+  return {line:0, column:0};
+}
+function findLineFixed(lines, e, textLength) {
+  if (e >= textLength) {
+    const last = lines[lines.length-1];
+    return {line: lines.length-1, column: last.visualWidth};
+  }
+  let n=0, r=lines.length-1;
+  const t={lines};
+  for (;n<=r;) {
+    const o=Math.floor((n+r)/2), s=lines[o];
+"""
+        + FIND_LINE_NEW
+        + r"""
+  }
+  return {line:0, column:0};
+}
+function scrollTo(findLine, lines, e, V1, prev, textLength) {
+  const s = lines.length, c = Math.max(0, s - V1);
+  let i = Math.min(Math.max(0, prev), c);
+  const r = findLine(lines, e, textLength).line;
+  r < i ? (i = r) : r >= i + V1 && (i = r - V1 + 1);
+  return Math.min(Math.max(0, i), c);
+}
+const lines = [
+  {startIndex:0,endIndex:80,visualWidth:80,charToColumn:{0:0}},
+  {startIndex:80,endIndex:120,visualWidth:40,charToColumn:{0:0}},
+  {startIndex:121,endIndex:121,visualWidth:0,charToColumn:{0:0}},
+  {startIndex:122,endIndex:127,visualWidth:5,charToColumn:{0:0}},
+  {startIndex:128,endIndex:128,visualWidth:0,charToColumn:{0:0}},
+  {startIndex:129,endIndex:129,visualWidth:0,charToColumn:{0:0}},
+  {startIndex:130,endIndex:184,visualWidth:54,charToColumn:{0:0}},
+];
+const textLength = 184, V1 = 6;
+const onKorean = scrollTo(findLineFixed, lines, 130, V1, 0, textLength);
+const stockBlank = scrollTo(findLineStock, lines, 129, V1, onKorean, textLength);
+const fixedBlank = scrollTo(findLineFixed, lines, 129, V1, onKorean, textLength);
+// Soft-wrap shared boundary must stay on the next visual line (not EOL of prev).
+const soft = findLineFixed(lines, 80, textLength);
+console.log(JSON.stringify({onKorean, stockBlank, fixedBlank, soft}));
+"""
+    )
+    got = json.loads(out)
+    assert got["onKorean"] == 1, got
+    assert got["stockBlank"] == 0, got
+    assert got["fixedBlank"] == 1, got
+    assert got["soft"] == {"line": 1, "column": 0}, got
 
 
 def test_grapheme_steps() -> None:
@@ -242,28 +377,35 @@ console.log(JSON.stringify({
 
 
 def test_iterator_upgrade_on_old_patch() -> None:
+    from apply_patch import FIND_LINE_OLD
+
     stub = (
         "__wordSeg granularity:\"grapheme\" n.backspace&&B>0){const __g= function __cw( \\p{Mn}|\\p{Me}|\\p{Cf}"
         "__g.segment(__rest).next().value"
         "__g.segment(J.slice(B)).next().value"
+        + FIND_LINE_OLD
     )
     updated, applied = patch_input_bundle(stub)
     assert "grapheme iterator (right)" in applied
     assert "grapheme iterator (delete)" in applied
+    assert "empty-line findLine" in applied
     assert ".segment(__rest).next()" not in updated
     assert "[Symbol.iterator]().next()" in updated
+    assert FIND_LINE_OLD not in updated
 
 
 def test_apply_does_not_touch_arrows_or_width() -> None:
-    from apply_patch import BS_OLD, LR_OLD, NAV_OLD, TL_OLD
+    from apply_patch import BS_OLD, FIND_LINE_OLD, LR_OLD, NAV_OLD, TL_OLD
 
-    fixture = "HEAD" + WORD_OLD + LR_OLD + BS_OLD + NAV_OLD + TL_OLD + "TAIL"
+    fixture = "HEAD" + WORD_OLD + LR_OLD + BS_OLD + NAV_OLD + TL_OLD + FIND_LINE_OLD + "TAIL"
     updated, applied = patch_input_bundle(fixture)
-    assert applied == ["word helpers"], applied
+    assert applied == ["word helpers", "empty-line findLine"], applied
     assert LR_OLD in updated
     assert BS_OLD in updated
     assert NAV_OLD in updated
     assert TL_OLD in updated
+    assert FIND_LINE_OLD not in updated
+    assert "e===s.endIndex&&(s.startIndex===s.endIndex" in updated
     assert "__cw" not in updated
     assert 'granularity:"grapheme"' not in updated
     assert "\\p{Mn}|\\p{Me}|\\p{Cf}" not in updated
@@ -358,6 +500,8 @@ if __name__ == "__main__":
     test_thai_width()
     test_hangul_display_width()
     test_patcher_has_no_ime_cursor_hack()
+    test_empty_line_findline_maps_blank_not_url()
+    test_empty_line_scroll_keeps_korean_visible()
     test_grapheme_steps()
     test_iterator_upgrade_on_old_patch()
     test_apply_does_not_touch_arrows_or_width()
