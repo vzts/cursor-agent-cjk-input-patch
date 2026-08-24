@@ -26,7 +26,7 @@
 
 <br>
 
-> **명칭:** 공식 제품명은 [**Cursor CLI**](https://cursor.com/cli)이고, 실행 명령은 **`agent`**입니다 (`cursor-agent`는 구 alias). 이 repo는 설치된 CLI 번들을 패치하며 Cursor 바이너리를 포함하지 않습니다.
+> **명칭:** 제품명은 [**Cursor CLI**](https://cursor.com/cli), 실행 명령은 **`agent`** (`cursor-agent`는 legacy alias). 로컬 설치본만 패치하며 Cursor 바이너리는 포함하지 않습니다.
 
 <table>
 <tr>
@@ -34,20 +34,18 @@
 
 ### 패치 전
 
-**`agent`** 프롬프트에서 두 가지가 어색합니다:
+**`agent`** 프롬프트에서:
 
-- **Option/Alt + ← / →** 가 ASCII “단어”(`[A-Za-z0-9_]`)만 인식하고 나머지는 건너뜀
-- 긴 URL 위 **빈 줄에서 ↑** 하면 스크롤이 튀고 URL 줄로 커서 이동
+- **Option/Alt + ← / →** (macOS) 또는 **Ctrl + ← / →** 가 `[A-Za-z0-9_]` 만 “단어”로 보고 나머지는 건너뜀
+- 소프트 줄바꿈된 URL/경로 **위 빈 줄에서 ↑** 하면 스크롤이 튀고 줄바꿈된 행으로 커서 이동
 
 </td>
 <td width="50%" valign="top">
 
 ### 패치 후
 
-같은 키, 예측 가능한 동작:
-
-- `Intl.Segmenter`로 유니코드(UAX #29) 단어 경계 인식
-- 빈 줄이 올바른 시각적 줄에 매핑 — 스크롤 점프 없음
+- `Intl.Segmenter` (`granularity: "word"`, 런타임 기본 로케일)로 단어 경계
+- 빈 줄·줄바꿈 EOL이 올바른 시각적 줄에 매핑 — 스크롤 점프 없음
 
 </td>
 </tr>
@@ -61,14 +59,14 @@
 
 ## 어떤 언어·사용자에게 영향?
 
-CJK 한정이 아닙니다. 두 fix의 범위가 다릅니다:
+CJK 한정이 아닙니다:
 
-| Fix | 영향 받는 사용자 |
-|:----|:----------------|
-| **Option/Ctrl + ← / →** (단어 이동) | **`[A-Za-z0-9_]` 밖 문자**를 쓰는 경우 — 한국어, 일본어, 중국어, 키릴, 아랍어, 히브리어, 태국어, 그리스어, 데바나가리 등. 순수 ASCII 영어만 쓰면 대체로 문제 없음. [Codex CLI](https://github.com/openai/codex/issues/16584), [Claude Code](https://github.com/anthropics/claude-code/issues/11099) 등에서도 유사 이슈 보고됨. |
-| **줄바꿈된 긴 줄 위 빈 줄에서 ↑** | **언어 무관** — URL·경로 등 소프트 줄바꿈 + 그 위 빈 줄 |
+| Fix | 영향 |
+|:----|:-----|
+| **Option/Ctrl + ← / →** | **`[A-Za-z0-9_]` 밖 문자** — 한·중·일, 키릴, 아랍, 히브리, 태국, 그리스, 데바나가리, 악센트 라틴(`café`) 등. 순수 ASCII 영어는 대체로 문제 없음. [Codex CLI](https://github.com/openai/codex/issues/16584), [Claude Code](https://github.com/anthropics/claude-code/issues/11099) 등 유사 이슈 |
+| **줄바꿈된 긴 줄 위 빈 줄 ↑** | **언어 무관** — URL, 경로 등 soft-wrap + 위 빈 줄 |
 
-한국어/CJK 불편에서 시작했지만, 단어 이동 패치는 stock ASCII regex가 건너뛰는 **모든 비ASCII 문자**에 도움이 됩니다.
+한국어/CJK에서 시작했지만, word-motion 패치는 stock ASCII regex가 건너뛰는 **모든 문자体系**에 해당합니다.
 
 <br>
 
@@ -80,18 +78,19 @@ cd cursor-cli-input-patch
 
 python3 tests/test_behavior.py
 python3 apply_patch.py
-python3 apply_patch.py --install   # 선택: `agent` 실행마다 자동 패치
+python3 apply_patch.py --install   # 선택: zsh 훅 (아래 참고)
 ```
 
-패치 후 **`agent`** 세션을 재시작하세요.
+패치 후 **`agent`** (또는 legacy **`cursor-agent`**) 세션을 재시작하세요.
 
 <details>
 <summary><strong>필요 환경</strong></summary>
 
 <br>
 
-- **Python 3**, **Node.js**, **macOS**
-- **Cursor CLI** 로컬 설치 (`curl https://cursor.com/install -fsS | bash`)
+- **Python 3**, **Node.js**, **macOS** (IDE worker 경로 기준)
+- **Cursor CLI** 설치: `curl https://cursor.com/install -fsS | bash`
+- **`--install`** — **zsh 전용** (`~/.zshrc`). bash/fish는 수동 실행 또는 직접 래핑
 
 </details>
 
@@ -103,8 +102,8 @@ python3 apply_patch.py --install   # 선택: `agent` 실행마다 자동 패치
 
 | | |
 |:--|:--|
-| **단어 이동** | `Intl.Segmenter` (`granularity: "word"`) |
-| **빈 줄** | `findLine` — 빈 줄·EOL이 line 0으로 떨어지지 않음 |
+| **단어 이동** | ASCII helper → `Intl.Segmenter`, Option/Ctrl + 화살표 |
+| **빈 줄** | `findLine` — 빈 줄·wrap EOL이 line 0으로 떨어지지 않음 |
 
 디스크 경로(내부명 `cursor-agent`):
 
@@ -113,29 +112,76 @@ python3 apply_patch.py --install   # 선택: `agent` 실행마다 자동 패치
 ~/Library/Application Support/Cursor/.../cursor-agent-worker/.../versions/<최신>/
 ```
 
+`--no-worker`로 CLI만 패치 가능.
+
 <br>
 
 ## 패치하지 않음
 
 | 영역 | 이유 |
 |:-----|:-----|
-| 일반 **← / →** | NFC 한글은 이미 음절 단위 |
-| **Backspace / Delete** grapheme | 동일 |
-| CJK **표시 폭 ↑ / ↓** | 터미널 1칸/코드포인트 |
-| **IME** 후보창 | `agent` 멈춤 유발 — 제거 |
+| 일반 **← / →** | NFC 한글은 UTF-16에서 음절 단위 — 패치 불필요 |
+| **Backspace / Delete** (grapheme) | 동일 |
+| CJK **표시 폭 ↑ / ↓** | 터미널 1칸/코드포인트, 폭 2 계산 오류 |
+| **IME** 후보창 | 예전 패치가 `agent` 멈춤 — 제거·거부 |
+
+터미널 커서를 **escape sequence로 움직이지 않습니다.**
 
 <br>
 
-## 명령어 · 백업
+## 명령어
 
 ```bash
-python3 apply_patch.py --restore
-python3 apply_patch.py --ensure
+python3 apply_patch.py              # CLI + worker 패치
+python3 apply_patch.py --install    # zsh 훅 → `agent` 전 자동 패치
+python3 apply_patch.py --ensure     # 완료 시 조용히; 불일치 시 경고 후 exit 0
+python3 apply_patch.py --restore    # .orig.bak 복원
 python3 apply_patch.py --list-backups
+python3 apply_patch.py --dry-run -v
+python3 apply_patch.py --no-worker  # CLI만
 ```
 
-백업: `~/.local/share/cursor-cli-input-patch/backups/*.orig.bak`  
-(구 경로 `cursor-agent-cjk-input-patch`는 자동 이전)
+<details>
+<summary><strong>CLI 업데이트 · 백업 · 재설치</strong></summary>
+
+<br>
+
+업데이트 시 버전 폴더가 교체됩니다. `python3 apply_patch.py` 재실행, 또는 `--install` 시 `agent`만 실행.
+
+백업 — 버전당 원본 하나, 덮어쓰지 않음:
+
+```
+~/.local/share/cursor-cli-input-patch/backups/*.orig.bak
+```
+
+구 경로 `cursor-agent-cjk-input-patch`는 첫 실행 시 자동 이전.
+
+미니파이 불일치 시 **fail closed**(에러 종료). **`--ensure`** 는 경고 후 `agent` 실행 허용. 최후 수단:
+
+```bash
+curl https://cursor.com/install -fsS | bash
+```
+
+</details>
+
+<br>
+
+## 동작 흐름
+
+```mermaid
+flowchart LR
+  A[agent 실행] --> B{zsh 훅?}
+  B -->|yes| C[apply_patch.py --ensure]
+  B -->|no| D[수동 실행]
+  C --> E[4794.index.js 탐색]
+  D --> E
+  E --> F[snippet 교체]
+  F --> G{node --check}
+  G -->|ok| H[쓰기 + 백업]
+  G -->|fail| I[롤백]
+```
+
+패턴은 특정 minify 형태에 고정 — Cursor가 바꾸면 추측하지 않습니다.
 
 <br>
 
@@ -143,7 +189,7 @@ python3 apply_patch.py --list-backups
 
 ```bash
 python3 tests/test_behavior.py
-python3 tests/test_pty_arrows.py
+python3 tests/test_pty_arrows.py   # 패치된 CLI + PATH에 `agent` 필요
 ```
 
 <br>

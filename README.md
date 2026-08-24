@@ -26,7 +26,7 @@
 
 <br>
 
-> **Naming:** Cursor’s official product is [**Cursor CLI**](https://cursor.com/cli). The command you run is **`agent`** (`cursor-agent` is a legacy alias). This repo patches the installed CLI bundle — it does not ship Cursor binaries.
+> **Naming:** The product is [**Cursor CLI**](https://cursor.com/cli). You run **`agent`** (`cursor-agent` is a legacy alias). This repo patches your local install — it does **not** ship Cursor binaries.
 
 <table>
 <tr>
@@ -36,8 +36,8 @@
 
 In the **`agent`** prompt, two things feel wrong:
 
-- **Option/Alt + ← / →** only recognizes ASCII “words” (`[A-Za-z0-9_]`) and skips everything else
-- **↑** onto a blank line above a wrapped URL scrolls away and snaps the caret to the URL
+- **Option/Alt + ← / →** (macOS) or **Ctrl + ← / →** (Windows/Linux) only treats `[A-Za-z0-9_]` as “word” characters and skips the rest
+- **↑** onto a blank line above a soft-wrapped URL/path scrolls away and snaps the caret to the wrapped row
 
 </td>
 <td width="50%" valign="top">
@@ -46,8 +46,8 @@ In the **`agent`** prompt, two things feel wrong:
 
 Same keys, predictable behavior:
 
-- Word jump uses `Intl.Segmenter` (Unicode / UAX #29 word boundaries)
-- Blank lines map to the correct visual row — no scroll jump
+- Word jump uses `Intl.Segmenter` (`granularity: "word"`, runtime default locale)
+- Blank lines and wrap end-of-line map to the correct visual row — no scroll jump
 
 </td>
 </tr>
@@ -65,10 +65,10 @@ Not CJK-only — the two fixes have different scopes:
 
 | Fix | Affected users |
 |:----|:----------------|
-| **Option/Ctrl + ← / →** (word jump) | Anyone typing scripts **outside `[A-Za-z0-9_]`** — Korean, Japanese, Chinese, Cyrillic, Arabic, Hebrew, Thai, Greek, Devanagari, etc. Mostly fine if you only type English words in plain ASCII. Same class of bug reported in other terminal agents ([Codex CLI](https://github.com/openai/codex/issues/16584), [Claude Code](https://github.com/anthropics/claude-code/issues/11099)). |
-| **↑ on a blank line** above a wrapped row | **Language-agnostic** — long URLs/paths that soft-wrap, with empty lines above. |
+| **Option/Ctrl + ← / →** | Text with characters **outside `[A-Za-z0-9_]`** — Korean, Japanese, Chinese, Cyrillic, Arabic, Hebrew, Thai, Greek, Devanagari, Latin with accents (`café`), etc. Mostly fine for plain ASCII English. Same class of bug in other TUIs ([Codex CLI](https://github.com/openai/codex/issues/16584), [Claude Code](https://github.com/anthropics/claude-code/issues/11099)). |
+| **↑ on a blank line** above a wrapped row | **Language-agnostic** — long URLs, file paths, or any soft-wrapped line with empty rows above. |
 
-This repo was built around Korean/CJK pain points, but the word-motion patch helps **any non-ASCII script** the stock ASCII regex skips.
+Built around Korean/CJK pain points; the word-motion patch helps **any script** the stock ASCII regex skips.
 
 <br>
 
@@ -78,12 +78,12 @@ This repo was built around Korean/CJK pain points, but the word-motion patch hel
 git clone https://github.com/vzts/cursor-cli-input-patch.git
 cd cursor-cli-input-patch
 
-python3 tests/test_behavior.py   # sanity check — no Cursor install needed
-python3 apply_patch.py           # patch latest CLI + IDE worker
-python3 apply_patch.py --install # optional: auto-patch on every `agent` launch
+python3 tests/test_behavior.py   # no Cursor install needed
+python3 apply_patch.py           # latest CLI + IDE worker
+python3 apply_patch.py --install # optional: zsh hook (see below)
 ```
 
-Restart **`agent`** after patching.
+Restart **`agent`** (or **`cursor-agent`** if you still use that alias) after patching.
 
 <details>
 <summary><strong>Requirements</strong></summary>
@@ -92,8 +92,9 @@ Restart **`agent`** after patching.
 
 - **Python 3** — runs the patcher
 - **Node.js** — `node --check` before writing
-- **macOS** — paths match the Cursor CLI install layout
-- **Cursor CLI** — already installed (`curl https://cursor.com/install -fsS | bash`)
+- **macOS** — install paths (especially the IDE worker copy) match Cursor’s layout today
+- **Cursor CLI** — already installed: `curl https://cursor.com/install -fsS | bash`
+- **`--install`** — **zsh only** (writes `~/.zshrc`). Bash/fish: run `python3 apply_patch.py` manually or wrap `agent` yourself.
 
 </details>
 
@@ -101,19 +102,21 @@ Restart **`agent`** after patching.
 
 ## What it patches
 
-Only **`4794.index.js`** — the text-input bundle under your existing install.
+Only **`4794.index.js`** — the text-input bundle in your existing install.
 
 | | |
 |:--|:--|
-| **Word motion** | ASCII-only helpers → `Intl.Segmenter` (`granularity: "word"`) for Option/Ctrl + arrow |
-| **Empty lines** | `findLine` fix so blank rows and wrap EOL don't fall back to line 0 |
+| **Word motion** | ASCII-only helpers → `Intl.Segmenter` for Option/Ctrl + arrow |
+| **Empty lines** | `findLine` fix — blank rows and wrap EOL no longer fall back to line 0 |
 
-Auto-targets (Cursor’s internal paths — still named `cursor-agent` on disk):
+Auto-targets (on-disk paths still use the `cursor-agent` name):
 
 ```
 ~/.local/share/cursor-agent/versions/<latest>/
 ~/Library/Application Support/Cursor/.../cursor-agent-worker/.../versions/<latest>/
 ```
+
+Use `--no-worker` to patch the CLI copy only.
 
 <br>
 
@@ -121,25 +124,25 @@ Auto-targets (Cursor’s internal paths — still named `cursor-agent` on disk):
 
 | Area | Reason |
 |:-----|:-------|
-| Plain **← / →** | NFC Hangul is already one UTF-16 step per syllable |
-| **Backspace / Delete** grapheme | Same — no patch needed |
-| CJK **display-width ↑ / ↓** | Terminal caret is 1 column per code point; width-2 math lands wrong |
-| **IME** candidate position | Old reposition patch hung `agent` — removed and refused |
+| Plain **← / →** | NFC Hangul is already one UTF-16 code unit per syllable; no patch needed |
+| **Backspace / Delete** (grapheme) | Same |
+| CJK **display-width ↑ / ↓** | Terminal caret is 1 column per code point; width-2 math lands on the wrong glyph |
+| **IME** candidate window | An older reposition patch hung `agent` — removed and refused |
 
-The patcher never moves the terminal cursor with escape sequences.
+The patcher **never** moves the terminal cursor with escape sequences.
 
 <br>
 
 ## Commands
 
 ```bash
-python3 apply_patch.py              # patch
-python3 apply_patch.py --install    # zsh hook → auto-patch on `agent` launch
-python3 apply_patch.py --ensure     # quiet skip if done; warn on mismatch
+python3 apply_patch.py              # patch CLI + worker
+python3 apply_patch.py --install    # zsh hook → auto-patch before `agent`
+python3 apply_patch.py --ensure     # quiet if done; warn and exit 0 on mismatch
 python3 apply_patch.py --restore    # rollback from .orig.bak
 python3 apply_patch.py --list-backups
-python3 apply_patch.py --dry-run -v
-python3 apply_patch.py --no-worker  # CLI only, skip IDE worker copy
+python3 apply_patch.py --dry-run -v # preview / verbose
+python3 apply_patch.py --no-worker  # CLI only
 ```
 
 <details>
@@ -147,7 +150,7 @@ python3 apply_patch.py --no-worker  # CLI only, skip IDE worker copy
 
 <br>
 
-Cursor updates replace the version folder. Re-run `python3 apply_patch.py` (or just launch `agent` if `--install` is set).
+Cursor updates replace the version folder. Re-run `python3 apply_patch.py`, or launch `agent` if `--install` is set.
 
 Backups — one pristine original per version, never overwritten:
 
@@ -155,9 +158,9 @@ Backups — one pristine original per version, never overwritten:
 ~/.local/share/cursor-cli-input-patch/backups/*.orig.bak
 ```
 
-(Older clones used `~/.local/share/cursor-agent-cjk-input-patch/backups/` — migrated automatically.)
+Older clones used `~/.local/share/cursor-agent-cjk-input-patch/backups/` — moved on first run.
 
-If a future minify no longer matches, the patcher **fails closed** (`--ensure` warns and still starts `agent`). Last resort:
+If a future minify no longer matches, the patcher **fails closed** (exits with an error). With **`--ensure`**, it prints a warning and still lets `agent` start. Last resort:
 
 ```bash
 curl https://cursor.com/install -fsS | bash
@@ -189,12 +192,12 @@ Patterns are pinned to a specific minified shape — the patcher refuses to gues
 ## Tests
 
 ```bash
-python3 tests/test_behavior.py    # portable, no Cursor needed
-python3 tests/test_pty_arrows.py  # PTY checks (needs patched CLI)
+python3 tests/test_behavior.py    # portable; no Cursor install
+python3 tests/test_pty_arrows.py  # live TUI over PTY; needs patched CLI + `agent` on PATH
 ```
 
 <br>
 
 <p align="center">
-  <sub>Unofficial community tool · not affiliated with Cursor · <a href="LICENSE">MIT</a> © 2026 <a href="https://github.com/vzts">vzts</a></sub>
+  <sub>Unofficial · not affiliated with Cursor · <a href="LICENSE">MIT</a> © 2026 <a href="https://github.com/vzts">vzts</a></sub>
 </p>
