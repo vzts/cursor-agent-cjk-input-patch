@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Drive the real agent TUI over a PTY and locate the inverse caret."""
+"""Drive the Cursor CLI (`agent`) TUI over a PTY and locate the inverse caret."""
 from __future__ import annotations
 
 import errno

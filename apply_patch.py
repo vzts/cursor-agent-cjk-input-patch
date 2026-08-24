@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Apply unofficial CJK input patches to a local Cursor Agent CLI install.
+"""Apply unofficial Unicode input patches to a local Cursor CLI install.
 
-Patches Hangul Option/Ctrl+arrow word motion, and empty-line scroll mapping
-so Up onto a blank line above a long URL does not jump the caret to the URL.
+Patches Option/Ctrl+arrow word motion for non-ASCII scripts (via Intl.Segmenter),
+and empty-line scroll mapping so Up onto a blank line above a long wrapped URL
+does not jump the caret to the URL.
 
 Does not redistribute Cursor binaries. See README.md.
 """
@@ -15,7 +16,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-BACKUP_DIR = Path.home() / ".local/share/cursor-agent-cjk-input-patch" / "backups"
+BACKUP_DIR = Path.home() / ".local/share/cursor-cli-input-patch" / "backups"
+LEGACY_BACKUP_DIR = Path.home() / ".local/share/cursor-agent-cjk-input-patch" / "backups"
 DEFAULT_VERSIONS = Path.home() / ".local/share/cursor-agent" / "versions"
 WORKER_VERSIONS = (
     Path.home()
@@ -158,8 +160,32 @@ FORBIDDEN_MARKERS = (
 )
 
 
-HOOK_BEGIN = "# cursor-agent-cjk-input-patch begin"
-HOOK_END = "# cursor-agent-cjk-input-patch end"
+HOOK_BEGIN = "# cursor-cli-input-patch begin"
+HOOK_END = "# cursor-cli-input-patch end"
+LEGACY_HOOK_BEGIN = "# cursor-agent-cjk-input-patch begin"
+LEGACY_HOOK_END = "# cursor-agent-cjk-input-patch end"
+
+
+def migrate_backup_dir() -> None:
+    """Move backups from the old repo-named directory, if present."""
+    if not LEGACY_BACKUP_DIR.exists():
+        return
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    for bak in LEGACY_BACKUP_DIR.glob("*.bak"):
+        dest = BACKUP_DIR / bak.name
+        if not dest.exists():
+            shutil.move(str(bak), str(dest))
+    try:
+        LEGACY_BACKUP_DIR.rmdir()
+    except OSError:
+        pass
+
+
+def backup_roots() -> list[Path]:
+    roots = [BACKUP_DIR]
+    if LEGACY_BACKUP_DIR.exists() and LEGACY_BACKUP_DIR != BACKUP_DIR:
+        roots.append(LEGACY_BACKUP_DIR)
+    return roots
 
 
 def latest_version(root: Path) -> Path | None:
@@ -197,24 +223,28 @@ def ensure_original_backup(path: Path, original_text: str) -> Path | None:
 
 
 def original_backup_for(path: Path) -> Path | None:
-    dest = orig_backup_path(path)
-    if dest.exists() and is_original_text(dest.read_text()):
-        return dest
-    fallback = BACKUP_DIR / f"cli-{path.parent.name}-{path.name}.orig.bak"
-    if fallback.exists() and is_original_text(fallback.read_text()):
-        return fallback
-    if not BACKUP_DIR.exists():
-        return None
-    legacy = [
-        bak
-        for bak in BACKUP_DIR.glob("*.bak")
-        if not bak.name.endswith(".orig.bak")
-        and (bak.name.startswith(f"{path.parent.name}-{path.name}.") or bak.name.startswith(f"{path.name}."))
-        and is_original_text(bak.read_text())
-    ]
-    if not legacy:
-        return None
-    return max(legacy, key=lambda p: p.stat().st_mtime)
+    for root in backup_roots():
+        dest = root / f"{install_kind(path)}-{path.parent.name}-{path.name}.orig.bak"
+        if dest.exists() and is_original_text(dest.read_text()):
+            return dest
+        fallback = root / f"cli-{path.parent.name}-{path.name}.orig.bak"
+        if fallback.exists() and is_original_text(fallback.read_text()):
+            return fallback
+        if not root.exists():
+            continue
+        legacy = [
+            bak
+            for bak in root.glob("*.bak")
+            if not bak.name.endswith(".orig.bak")
+            and (
+                bak.name.startswith(f"{path.parent.name}-{path.name}.")
+                or bak.name.startswith(f"{path.name}.")
+            )
+            and is_original_text(bak.read_text())
+        ]
+        if legacy:
+            return max(legacy, key=lambda p: p.stat().st_mtime)
+    return None
 
 
 def migrate_legacy_backups() -> None:
@@ -250,17 +280,23 @@ def migrate_legacy_backups() -> None:
 
 
 def list_backups() -> None:
+    migrate_backup_dir()
     migrate_legacy_backups()
-    if not BACKUP_DIR.exists():
-        print(f"no backups at {BACKUP_DIR}")
-        return
-    files = sorted(BACKUP_DIR.glob("*.orig.bak"))
-    if not files:
-        print(f"no backups at {BACKUP_DIR}")
-        return
-    print(f"original backups in {BACKUP_DIR}:")
-    for bak in files:
-        print(f"  {bak.name}")
+    shown = False
+    for root in backup_roots():
+        if not root.exists():
+            continue
+        files = sorted(root.glob("*.orig.bak"))
+        if not files:
+            continue
+        if not shown:
+            print("original backups:")
+            shown = True
+        print(f"  {root}/")
+        for bak in files:
+            print(f"    {bak.name}")
+    if not shown:
+        print(f"no backups under {BACKUP_DIR}")
 
 
 def replace_unique(text: str, old: str, new: str, label: str, already: str) -> tuple[str, bool]:
@@ -419,6 +455,7 @@ def shell_hook(script: Path) -> str:
     return (
         f"{HOOK_BEGIN}\n"
         f"agent() {{ python3 \"{script}\" --ensure; command agent \"$@\"; }}\n"
+        f"# cursor-agent is a legacy alias; hook it too if your shell still uses it.\n"
         f"cursor-agent() {{ python3 \"{script}\" --ensure; command cursor-agent \"$@\"; }}\n"
         f"{HOOK_END}\n"
     )
@@ -429,16 +466,19 @@ def install_shell_hook() -> Path:
     script = Path(__file__).resolve()
     block = shell_hook(script)
     text = rc.read_text() if rc.exists() else ""
-    if HOOK_BEGIN in text:
-        text = re.sub(
-            rf"{re.escape(HOOK_BEGIN)}.*?{re.escape(HOOK_END)}\n?",
-            block,
-            text,
-            count=1,
-            flags=re.S,
-        )
-    else:
-        text = text.rstrip() + "\n\n" + block
+    for begin, end in (
+        (HOOK_BEGIN, HOOK_END),
+        (LEGACY_HOOK_BEGIN, LEGACY_HOOK_END),
+    ):
+        if begin in text:
+            text = re.sub(
+                rf"{re.escape(begin)}.*?{re.escape(end)}\n?",
+                "",
+                text,
+                count=1,
+                flags=re.S,
+            )
+    text = text.rstrip() + "\n\n" + block
     rc.write_text(text)
     print(f"installed shell hook in {rc}")
     print("open a new terminal (or `source ~/.zshrc`) so `agent` auto-patches on launch")
@@ -450,7 +490,7 @@ def main() -> None:
     parser.add_argument(
         "version_dir",
         nargs="?",
-        help="Cursor agent version directory (defaults to latest CLI + IDE worker)",
+        help="Cursor CLI version directory (defaults to latest CLI + IDE worker)",
     )
     parser.add_argument(
         "--worker",
@@ -474,6 +514,7 @@ def main() -> None:
     parser.add_argument("-v", "--verbose", action="store_true", help="Print per-file details")
     args = parser.parse_args()
 
+    migrate_backup_dir()
     migrate_legacy_backups()
 
     if args.list_backups:
@@ -496,7 +537,7 @@ def main() -> None:
             patch_tree(root, dry_run=args.dry_run, verbose=args.verbose)
         except SystemExit as exc:
             if args.ensure:
-                print(f"cjk patch skipped ({root.name}): {exc}", file=sys.stderr)
+                print(f"input patch skipped ({root.name}): {exc}", file=sys.stderr)
                 continue
             raise
 
