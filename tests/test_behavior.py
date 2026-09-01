@@ -18,7 +18,9 @@ from apply_patch import (  # noqa: E402
     LR_NEW,
     REPLACEMENTS,
     WORD_NEW,
+    WORD_NEW_658,
     WORD_OLD,
+    WORD_OLD_658,
     patch_input_bundle,
 )
 
@@ -55,6 +57,50 @@ console.log(JSON.stringify(path));
     ]
     got = json.loads(out)
     assert got == expected, got
+
+
+def test_word_boundaries_658_variant() -> None:
+    out = run_node(
+        WORD_NEW_658
+        + r"""
+const s = "hello 안녕하세요 world";
+const path = [];
+let p = s.length;
+for (let i = 0; i < 3 && p > 0; i++) {
+  p = l(s, p);
+  path.push(s.slice(0, p) + "|" + s.slice(p));
+}
+console.log(JSON.stringify(path));
+"""
+    )
+    expected = [
+        "hello 안녕하세요 |world",
+        "hello |안녕하세요 world",
+        "|hello 안녕하세요 world",
+    ]
+    got = json.loads(out)
+    assert got == expected, got
+
+
+def test_stock_word_motion_skips_hangul_658_variant() -> None:
+    out = run_node(
+        WORD_OLD_658
+        + r"""
+const s = "hello 안녕하세요 world";
+const path = [];
+let p = s.length;
+for (let i = 0; i < 2 && p > 0; i++) {
+  p = l(s, p);
+  path.push(s.slice(0, p) + "|" + s.slice(p));
+}
+console.log(JSON.stringify(path));
+"""
+    )
+    got = json.loads(out)
+    assert got == [
+        "hello 안녕하세요 |world",
+        "|hello 안녕하세요 world",
+    ], got
 
 
 def test_stock_word_motion_skips_hangul() -> None:
@@ -207,7 +253,7 @@ def test_patcher_has_no_ime_cursor_hack() -> None:
     assert "upFromBottom" not in text
     assert "[Symbol.iterator]().next()" in LR_NEW
     assert all(old in text for old, _new in ((u[1], u[2]) for u in ITERATOR_UPGRADES))
-    assert [label for label, *_ in REPLACEMENTS] == ["word helpers", "empty-line findLine"]
+    assert [label for label, *_ in REPLACEMENTS] == ["empty-line findLine"]
 
 
 def test_empty_line_findline_maps_blank_not_url() -> None:
@@ -412,21 +458,22 @@ def test_apply_does_not_touch_arrows_or_width() -> None:
 
 
 def test_apply_on_fixture_is_unique_and_valid_js() -> None:
-    pieces = ["exports.id=4794;exports.modules={};"]
-    for _label, old, _new, _already in REPLACEMENTS:
-        pieces.append(old)
-    fixture = "".join(pieces)
-    updated, applied = patch_input_bundle(fixture)
-    assert applied == [label for label, *_ in REPLACEMENTS], applied
-    for marker in FORBIDDEN_MARKERS:
-        assert marker not in updated
-    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as f:
-        f.write(updated)
-        path = f.name
-    try:
-        subprocess.check_call(["node", "--check", path])
-    finally:
-        Path(path).unlink(missing_ok=True)
+    for old in (WORD_OLD, WORD_OLD_658):
+        pieces = ["exports.id=658;exports.modules={};", old]
+        for _label, repl_old, _new, _already in REPLACEMENTS:
+            pieces.append(repl_old)
+        fixture = "".join(pieces)
+        updated, applied = patch_input_bundle(fixture)
+        assert applied == ["word helpers", "empty-line findLine"], applied
+        for marker in FORBIDDEN_MARKERS:
+            assert marker not in updated
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as f:
+            f.write(updated)
+            path = f.name
+        try:
+            subprocess.check_call(["node", "--check", path])
+        finally:
+            Path(path).unlink(missing_ok=True)
 
 
 def test_one_orig_backup_never_overwritten() -> None:
@@ -493,7 +540,9 @@ def test_repo_privacy() -> None:
 
 if __name__ == "__main__":
     test_word_boundaries()
+    test_word_boundaries_658_variant()
     test_stock_word_motion_skips_hangul()
+    test_stock_word_motion_skips_hangul_658_variant()
     test_plain_left_hangul_is_one_syllable()
     test_width2_up_lands_on_wrong_glyph()
     test_up_down_uses_character_columns()

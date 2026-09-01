@@ -26,7 +26,9 @@ WORKER_VERSIONS = (
 )
 REINSTALL_HINT = "curl https://cursor.com/install -fsS | bash"
 
-# Unique original snippets from agent 2026.08.11-e8db854 `4794.index.js`.
+# Unique original snippets from agent text-input bundles.
+# 2026.08.11-e8db854: `4794.index.js` (c=word, i=space).
+# 2026.08.31-4057e58: `658.index.js` (i=word, c=space — minifier rename only).
 # If Cursor remintifies these, the patcher must fail closed rather than guess.
 WORD_OLD = (
     "function c(t){return/[A-Za-z0-9_]/.test(t)}function i(t){return/\\s/.test(t)}"
@@ -53,6 +55,36 @@ WORD_NEW = (
     "if(\"\\n\"===t[n-1])return n;n--}const r=__wordStarts(t);let o=0;"
     "for(const s of r){if(!(s<e))break;o=s}return o}"
 )
+WORD_OLD_658 = (
+    "function i(t){return/[A-Za-z0-9_]/.test(t)}function c(t){return/\\s/.test(t)}"
+    "function u(t,e){let n=e;const r=\"\\n\"===t[n]&&(0===n||\"\\n\"===t[n-1]);"
+    "if(n<t.length&&i(t[n]))for(;n<t.length&&i(t[n]);)n++;else r&&n++;"
+    "for(;n<t.length&&!i(t[n]);){if(\"\\n\"===t[n]&&(0===n||\"\\n\"===t[n-1]))return n;"
+    "if(\"\\n\"===t[n]&&n+1<t.length&&\"\\n\"===t[n+1])return n+1;n++}"
+    "return Math.min(t.length,Math.max(0,n))}function l(t,e){let n=e;if(n<=0)return 0;"
+    "for(n--;n>0&&!i(t[n]);){if(\"\\n\"===t[n]&&n>0&&\"\\n\"===t[n-1])return n;n--}"
+    "for(;n>0&&i(t[n-1]);)n--;return n}"
+)
+WORD_NEW_658 = (
+    "function i(t){return/[A-Za-z0-9_]/.test(t)}function c(t){return/\\s/.test(t)}"
+    "const __wordSeg=new Intl.Segmenter(void 0,{granularity:\"word\"});"
+    "function __wordStarts(t){const e=[];for(const n of __wordSeg.segment(t))"
+    "n.isWordLike&&e.push(n.index);return e}"
+    "function u(t,e){let n=e;const r=\"\\n\"===t[n]&&(0===n||\"\\n\"===t[n-1]);"
+    "if(r){n++;const o=__wordStarts(t);for(const s of o)if(s>=n)return s;"
+    "return Math.min(t.length,Math.max(0,n))}const o=__wordStarts(t);"
+    "for(const s of o)if(s>e)return s;for(let r=e;r<t.length;r++){"
+    "if(\"\\n\"===t[r]&&(0===r||\"\\n\"===t[r-1]))return r;"
+    "if(\"\\n\"===t[r]&&r+1<t.length&&\"\\n\"===t[r+1])return r+1}return t.length}"
+    "function l(t,e){if(e<=0)return 0;let n=e-1;for(;n>0&&\"\\n\"===t[n];){"
+    "if(\"\\n\"===t[n-1])return n;n--}const r=__wordStarts(t);let o=0;"
+    "for(const s of r){if(!(s<e))break;o=s}return o}"
+)
+WORD_VARIANTS: tuple[tuple[str, str, str], ...] = (
+    ("word helpers", WORD_OLD, WORD_NEW),
+    ("word helpers", WORD_OLD_658, WORD_NEW_658),
+)
+PREFERRED_INPUT_BUNDLES = ("658.index.js", "4794.index.js")
 
 LR_OLD = "if(n.leftArrow)v&&Nt--;else if(n.rightArrow)v&&Nt++;"
 LR_NEW = (
@@ -129,7 +161,6 @@ FIND_LINE_NEW = (
 )
 
 REPLACEMENTS: tuple[tuple[str, str, str, str], ...] = (
-    ("word helpers", WORD_OLD, WORD_NEW, "__wordSeg"),
     ("empty-line findLine", FIND_LINE_OLD, FIND_LINE_NEW, "e===s.endIndex&&(s.startIndex===s.endIndex"),
 )
 
@@ -262,13 +293,22 @@ def migrate_legacy_backups() -> None:
         if not is_original_text(text):
             bak.unlink(missing_ok=True)
             continue
-        marker = "-4794.index.js."
-        if marker in bak.name:
+        marker = None
+        fname = None
+        for bundle in PREFERRED_INPUT_BUNDLES:
+            candidate = f"-{bundle}."
+            if candidate in bak.name:
+                marker = candidate
+                fname = bundle
+                break
+        if marker:
             version = bak.name.split(marker, 1)[0]
-            fname = "4794.index.js"
         elif bak.name.startswith("4794.index.js."):
             version = latest_name
             fname = "4794.index.js"
+        elif bak.name.startswith("658.index.js."):
+            version = latest_name
+            fname = "658.index.js"
         else:
             bak.unlink(missing_ok=True)
             continue
@@ -312,8 +352,29 @@ def replace_unique(text: str, old: str, new: str, label: str, already: str) -> t
     return text.replace(old, new, 1), True
 
 
+def replace_word_helpers(text: str) -> tuple[str, bool]:
+    if "__wordSeg" in text:
+        return text, False
+    for label, old, new in WORD_VARIANTS:
+        count = text.count(old)
+        if count == 0:
+            continue
+        if count != 1:
+            raise SystemExit(f"pattern not unique ({count}): {label}")
+        text, ok = replace_unique(text, old, new, label, already="__wordSeg")
+        return text, ok
+    raise SystemExit("pattern not found: word helpers")
+
+
+def word_needles() -> tuple[str, ...]:
+    return (WORD_OLD, WORD_OLD_658, "__wordSeg")
+
+
 def patch_input_bundle(text: str) -> tuple[str, list[str]]:
     applied: list[str] = []
+    text, ok = replace_word_helpers(text)
+    if ok:
+        applied.append("word helpers")
     for label, old, new, already in REPLACEMENTS:
         text, ok = replace_unique(text, old, new, label, already)
         if ok:
@@ -337,22 +398,26 @@ def patch_input_bundle(text: str) -> tuple[str, list[str]]:
 
 
 def find_input_bundle(root: Path, *, restoring: bool = False) -> Path:
-    preferred = root / "4794.index.js"
-    if restoring and preferred.exists():
-        return preferred
+    if restoring:
+        for name in PREFERRED_INPUT_BUNDLES:
+            preferred = root / name
+            if preferred.exists():
+                return preferred
 
-    needle = WORD_OLD
-    if preferred.exists():
-        sample = preferred.read_text()
-        if needle in sample or "__wordSeg" in sample:
-            return preferred
+    needles = word_needles()
+    for name in PREFERRED_INPUT_BUNDLES:
+        preferred = root / name
+        if preferred.exists():
+            sample = preferred.read_text()
+            if any(n in sample for n in needles):
+                return preferred
 
     matches: list[Path] = []
     for path in root.glob("*.index.js"):
         if path.name == "index.js" or path.stat().st_size > 2_000_000:
             continue
         sample = path.read_text()
-        if needle in sample or "__wordSeg" in sample:
+        if any(n in sample for n in needles):
             matches.append(path)
     if len(matches) == 1:
         return matches[0]
